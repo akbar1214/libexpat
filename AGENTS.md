@@ -64,3 +64,86 @@ zig build benchmark            # Run the benchmark (needs testdata/benchmark.xml
 - `expat/tests/` — Test suite (C only, no C++ wrappers in 2.8.2)
 - `expat/examples/` — Example programs
 - `expat/expat_config.h.cmake` — Config header template used by Zig's `addConfigHeader`
+- `migration.md` — C-to-Zig migration plan (7 phases, ~2-3 months part-time)
+
+## Zig C Interop Reference (for C-to-Zig migration)
+
+### Exporting Zig functions to C
+
+```zig
+export fn my_function(arg: c_int) c_int {
+    return arg + 1;
+}
+```
+
+### C-compatible struct layout
+
+```zig
+// Regular Zig struct — compiler controls layout (DO NOT use across C boundary)
+const ZigPoint = struct { x: f64, y: f64, label: u8 };
+
+// C-compatible struct — guaranteed C layout (use across C boundary)
+const CPoint = extern struct { x: f64, y: f64, label: u8 };
+```
+
+### Calling C from Zig
+
+```zig
+const c = @cImport({
+    @cInclude("stdlib.h"),
+});
+const ptr = c.malloc(1024);
+```
+
+### Replacing #ifdef with comptime
+
+```zig
+fn parse(config: Config) void {
+    if (config.dtd) {  // Compiled out when dtd = false — zero cost
+        // DTD code
+    }
+}
+```
+
+### Error handling across C boundary
+
+Zig error unions cannot cross the C ABI. Use C-style return codes:
+```zig
+export fn XML_Parse(...) c_int {
+    return 1; // 1 = success, 0 = error (matches expat convention)
+}
+```
+
+### C interop type mapping
+
+| C type | Zig type |
+|---|---|
+| `int` | `c_int` |
+| `unsigned int` | `c_uint` |
+| `long` | `c_long` |
+| `size_t` | `usize` |
+| `void*` | `?*anyopaque` or `[*]u8` |
+| `const char*` | `[*:0]const u8` |
+| `NULL` | `null` |
+| `typedef struct X* X` | `*X` (opaque pointer) |
+
+### Key Zig features useful for C migration
+
+- **`comptime`**: Replaces `#ifdef`, X-macros, and template patterns
+- **`export fn`**: Makes Zig functions visible to C with stable ABI
+- **`extern struct`**: Guarantees C-compatible memory layout
+- **`@cImport`**: Imports C headers directly into Zig
+- **`std.c` / `std.os`**: Cross-platform replacements for POSIX/Win32 APIs
+- **No preprocessor**: All `#ifdef` logic becomes `comptime` or regular `if`
+
+### Codebase size for migration planning
+
+| Module | Lines | Complexity |
+|---|---|---|
+| `lib/xmlparse.c` | 9,319 | Very High (core parser) |
+| `lib/xmltok.c` + includes | ~3,617 | High (tokenizer, #include tricks) |
+| `lib/xmlrole.c` | 1,255 | Medium (state machine) |
+| `lib/random_*.c` | ~418 | Low (leaf modules) |
+| `xmlwf/` | ~2,414 | Medium (CLI tool) |
+| `tests/` | ~19,022 | Medium (test suite) |
+| `examples/` | ~481 | Low |

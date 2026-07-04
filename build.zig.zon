@@ -1,0 +1,12 @@
+.{
+    .name = .libexpat,
+    .version = "2.8.2",
+    .fingerprint = 0x39523a27b3f07b97,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "COPYING",
+        "README.md",
+        "expat/",
+    },
+}

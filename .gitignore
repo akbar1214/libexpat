@@ -36,3 +36,5 @@ expat/**/*.sdf
 expat/**/*.VC.db
 expat/tests/**/Debug/
 expat/tests/**/Release/
+zig-out/**
+.zig-cache/**

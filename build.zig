@@ -263,7 +263,6 @@ const sources: []const []const u8 = &.{
 
 const xmlwf_sources: []const []const u8 = &.{
     "xmlwf/codepage.c",
-    "xmlwf/readfilemap.c",
     "xmlwf/xmlfile.c",
     "xmlwf/xmlwf.c",
 };

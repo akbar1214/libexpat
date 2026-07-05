@@ -41,12 +41,6 @@ zig build benchmark            # Run the benchmark (needs testdata/benchmark.xml
 
 - The `build.zig` is adapted from the [allyourcodebase/libexpat](https://github.com/allyourcodebase/libexpat) reference packaging.
 - This is the upstream source repo, so `b.path()` is used instead of `b.dependency()` for local paths.
-- Random entropy source files (`lib/random_*.c`) must be conditionally compiled per target platform:
-  - `random_arc4random_buf.c` — macOS, BSD, DragonFly
-  - `random_getentropy.c` — macOS, BSD, glibc ≥2.17
-  - `random_getrandom.c` — Linux with glibc ≥2.25 or musl, FreeBSD ≥12, NetBSD ≥10
-  - `random_dev_urandom.c` — All non-Windows platforms
-  - `random_rand_s.c` — Windows only
 - The config header `expat_config.h` is generated from `expat/expat_config.h.cmake` using `addConfigHeader`.
 - C++ test wrappers (`tests/*_cxx.cpp`) do not exist in version 2.8.2 — only C tests are built.
 - `addPassthruArgs()` was removed in Zig 0.16.0; run steps no longer use it.
@@ -134,6 +128,12 @@ test_exe.root_module.linkLibrary(expat_random);
 - Use `std.c.arc4random_buf()` for arc4random (available on macOS/BSD via libc)
 - Use `std.posix` for other platform-specific random sources
 
+**Zig 0.16.0 API gotchas for separate library modules:**
+- `callconv(.C)` is now `callconv(.c)` (lowercase) — but `export fn` implies C calling convention, so the `callconv` on the outer function is unnecessary
+- `std.c.perror` does **not** exist in 0.16.0 — use `@cImport(@cInclude("stdio.h")).perror(name)` instead
+- `std.posix.open` / `std.posix.fstat` may not be available in standalone library modules — use `@cImport` with C headers, or `std.posix.openatZ` for open
+- For standalone Zig library modules linked to C executables, using `@cImport` for POSIX APIs is more reliable than `std.posix`
+
 ### Key Files
 
 - `build.zig` — Main Zig build script
@@ -141,7 +141,8 @@ test_exe.root_module.linkLibrary(expat_random);
 - `.mise.toml` — Zig version pin
 - `expat/lib/` — Core library sources
 - `expat/lib/lib.zig` — Zig root file for C-to-Zig migration (imports replacement modules)
-- `expat/lib/random_arc4random_buf.zig` — Zig replacement for C random source (Phase 1a)
+- `expat/lib/random.zig` — Unified cross-platform random byte generation (replaces 6 C files + 2 old Zig files)
+- `expat/lib/filemap.zig` — Unified cross-platform file mapping (replaces readfilemap.c, unixfilemap.c, win32filemap.c)
 - `expat/xmlwf/` — XML well-formedness checker
 - `expat/tests/` — Test suite (C only, no C++ wrappers in 2.8.2)
 - `expat/examples/` — Example programs

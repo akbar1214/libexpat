@@ -146,8 +146,8 @@ nametab.h, asciitab.h, utf8tab.h, iascitab.h, latin1tab.h
 | `random_getentropy.c` | — | `getentropy()` | BSD/macOS/glibc ≥2.17 |
 | `random_arc4random_buf.zig` | — | `arc4random_buf()` | BSD/macOS/glibc ≥2.36 (Zig) |
 | `random_dev_urandom.c` | — | `/dev/urandom` | All non-Windows |
-| `unixfilemap.c` | — | `mmap()` | Unix file mapping |
-| `win32filemap.c` | `CreateFileMapping()` | — | Windows file mapping |
+| `unixfilemap.c` | — | `mmap()` | Unix file mapping | **Done** → `xmlwf/filemap.zig` |
+| `win32filemap.c` | `CreateFileMapping()` | — | Windows file mapping | **Done** → `xmlwf/filemap.zig` |
 | `codepage.c` | `MultiByteToWideChar()` | — | Windows codepage |
 
 ### Compile-Time Feature Flags
@@ -170,12 +170,8 @@ nametab.h, asciitab.h, utf8tab.h, iascitab.h, latin1tab.h
 
 | Order | File | Lines | Difficulty | Status |
 |---|---|---|---|---|
-| 1a | `lib/random_arc4random_buf.c` + `.h` | 47 | Easy | **Done** |
-| 1b | `lib/random_arc4random.c` + `.h` | 56 | Easy | **Done** |
-| 1c | `lib/random_getentropy.c` | 60 | Easy | |
-| 1d | `lib/random_dev_urandom.c` | 72 | Easy | |
-| 1e | `lib/random_getrandom.c` | 95 | Medium | |
-| 1f | `lib/random_rand_s.c` | 88 | Easy | |
+| 1a-1f | `lib/random_*.c` + `.zig` (all 6 random sources) | ~418 | Easy | **Done** (unified into `lib/random.zig`) |
+| 1g | `xmlwf/readfilemap.c` + `unixfilemap.c` + `win32filemap.c` | 376 | Medium | **Done** (unified into `xmlwf/filemap.zig`) |
 
 **Approach for each:**
 1. Write a `.zig` file that `export fn`s the same C symbol
@@ -354,9 +350,9 @@ fn XmlTokImpl(comptime encoding: Encoding) type {
 |---|---|---|
 | `xmlwf/xmlwf.c` | 1,371 | Main CLI |
 | `xmlwf/xmlfile.c` | 301 | File reading |
-| `xmlwf/readfilemap.c` | 147 | Portable file mapping |
-| `xmlwf/unixfilemap.c` | 108 | Unix mmap |
-| `xmlwf/win32filemap.c` | 121 | Windows mapping |
+| `xmlwf/readfilemap.c` | 147 | Portable file mapping | **Done** → `xmlwf/filemap.zig` |
+| `xmlwf/unixfilemap.c` | 108 | Unix mmap | **Done** → `xmlwf/filemap.zig` |
+| `xmlwf/win32filemap.c` | 121 | Windows mapping | **Done** → `xmlwf/filemap.zig` |
 | `xmlwf/xmlmime.c` | 193 | MIME handling |
 | `xmlwf/codepage.c` | 98 | Windows codepage |
 

@@ -67,6 +67,34 @@ export fn XML_Parse(...) c_int {
 }
 ```
 
+### Zig 0.16.0 Random API
+
+`std.crypto.random` was removed in Zig 0.16.0. Use platform-specific alternatives:
+```zig
+const c = std.c;
+
+// For arc4random_buf (macOS, BSD, glibc ≥2.36)
+pub export fn writeRandomBytes_arc4random_buf(target: ?*anyopaque, count: usize) void {
+    c.arc4random_buf(@ptrCast(target), count);
+}
+
+// For getentropy (macOS, BSD, glibc ≥2.17)
+pub export fn writeRandomBytes_getentropy(target: ?*anyopaque, count: usize) c_int {
+    return c.getentropy(@ptrCast(target), count);
+}
+```
+
+### Symbol Emission with Lazy Compilation
+
+Zig uses lazy compilation — unreferenced imports are discarded. Force symbol emission:
+```zig
+// In the root file (lib.zig)
+const random_module = @import("random.zig");
+comptime {
+    _ = &random_module;  // Forces all pub exports in the module to be emitted
+}
+```
+
 ---
 
 ## Codebase Analysis
@@ -116,7 +144,7 @@ nametab.h, asciitab.h, utf8tab.h, iascitab.h, latin1tab.h
 | `random_rand_s.c` | `rand_s()` | — | Windows only |
 | `random_getrandom.c` | — | `getrandom()`/syscall | Linux ≥3.17 |
 | `random_getentropy.c` | — | `getentropy()` | BSD/macOS/glibc ≥2.17 |
-| `random_arc4random_buf.c` | — | `arc4random_buf()` | BSD/macOS/glibc ≥2.36 |
+| `random_arc4random_buf.zig` | — | `arc4random_buf()` | BSD/macOS/glibc ≥2.36 (Zig) |
 | `random_dev_urandom.c` | — | `/dev/urandom` | All non-Windows |
 | `unixfilemap.c` | — | `mmap()` | Unix file mapping |
 | `win32filemap.c` | `CreateFileMapping()` | — | Windows file mapping |
@@ -140,14 +168,14 @@ nametab.h, asciitab.h, utf8tab.h, iascitab.h, latin1tab.h
 
 **Goal:** Learn Zig patterns by converting the simplest, most isolated files.
 
-| Order | File | Lines | Difficulty |
-|---|---|---|---|
-| 1a | `lib/random_arc4random_buf.c` | 47 | Easy |
-| 1b | `lib/random_arc4random.c` | 56 | Easy |
-| 1c | `lib/random_getentropy.c` | 60 | Easy |
-| 1d | `lib/random_dev_urandom.c` | 72 | Easy |
-| 1e | `lib/random_getrandom.c` | 95 | Medium |
-| 1f | `lib/random_rand_s.c` | 88 | Easy |
+| Order | File | Lines | Difficulty | Status |
+|---|---|---|---|---|
+| 1a | `lib/random_arc4random_buf.c` + `.h` | 47 | Easy | **Done** |
+| 1b | `lib/random_arc4random.c` + `.h` | 56 | Easy | **Done** |
+| 1c | `lib/random_getentropy.c` | 60 | Easy | |
+| 1d | `lib/random_dev_urandom.c` | 72 | Easy | |
+| 1e | `lib/random_getrandom.c` | 95 | Medium | |
+| 1f | `lib/random_rand_s.c` | 88 | Easy | |
 
 **Approach for each:**
 1. Write a `.zig` file that `export fn`s the same C symbol
@@ -166,25 +194,67 @@ void writeRandomBytes_arc4random_buf(void *target, size_t count) {
 }
 ```
 
-The Zig version:
+The Zig version (what we actually wrote):
 ```zig
 const std = @import("std");
+const c = std.c;
 
-export fn writeRandomBytes_arc4random_buf(target: [*]u8, count: usize) void {
-    std.crypto.random.bytes(target[0..count]);
+pub export fn writeRandomBytes_arc4random_buf(target: ?*anyopaque, count: usize) void {
+    c.arc4random_buf(@ptrCast(target), count);
+}
+```
+
+The root file that imports it:
+```zig
+// expat/lib/lib.zig
+const random_arc4random_buf = @import("random_arc4random_buf.zig");
+comptime {
+    _ = &random_arc4random_buf;  // Force symbol emission
 }
 ```
 
 **Build change in `build.zig`:**
 ```zig
-// Remove from random_srcs: "lib/random_arc4random_buf.c"
-// Add a .zig source file instead
+// 1. Set root_source_file on the library module
+const expat = b.addLibrary(.{
+    .root_module = b.createModule(.{
+        .root_source_file = b.path("expat/lib/lib.zig"),  // <-- NEW
+        // ...
+    }),
+});
+
+// 2. Remove the C file from random_srcs
+// random_arc4random_buf.c is replaced by random_arc4random_buf.zig (imported via lib.zig)
+
+// 3. For test exe that compiles C sources directly, build a small Zig library and link it
+const expat_random = b.addLibrary(.{
+    .linkage = .static,
+    .name = "expat_random",
+    .root_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .root_source_file = b.path("expat/lib/lib.zig"),
+    }),
+});
+test_exe.root_module.linkLibrary(expat_random);
+
+// 4. In the C source that used the header, replace #include with extern declaration
+// #if defined(HAVE_ARC4RANDOM_BUF)
+//   extern void writeRandomBytes_arc4random_buf(void *target, size_t count);
+// #endif
 ```
 
 **What you'll learn:**
-- `export fn` for C ABI exports
-- Zig's standard library for crypto/random
-- How to mix C and Zig sources in build.zig
+- `export fn` for C ABI exports — must use `pub` and C-compatible types (`?*anyopaque` not `[*]u8`)
+- Zig's standard library: `std.c.arc4random_buf` (NOT `std.crypto.random` which doesn't exist in 0.16.0)
+- How to mix C and Zig sources in build.zig via `root_source_file`
+- `comptime { _ = &module; }` to force lazy compilation to emit symbols
+- Zig executables with C `main` can't use `root_source_file` pointing to Zig — build a small Zig library and link it via `root_module.linkLibrary()`
+- `linkLibrary()` on `Build.Step.Compile` was removed in Zig 0.16.0 — use `root_module.linkLibrary()` instead
+- C header files can be replaced with inline `extern` declarations in the C source
+
+**Phase 1a completed: 2026-07-05. All 4824 tests pass. C file and header fully removed; Zig replacement used by both library and test builds.**
 
 ---
 
@@ -343,20 +413,26 @@ Port the 3 example programs and benchmark tool. Straightforward translation.
 ## Recommended Starting Point
 
 Start with **Phase 1a** (`random_arc4random_buf.c` — 47 lines). This teaches:
-1. Writing `.zig` files that export C symbols
-2. Using Zig's build system to mix C and Zig
-3. Testing the conversion with the existing test suite
-4. Basic Zig syntax and standard library usage
+1. Writing `.zig` files that export C symbols — use `pub export fn` with C-compatible types
+2. Using Zig's build system to mix C and Zig — set `root_source_file` on `createModule()`
+3. `comptime { _ = &module; }` to force symbol emission from unreferenced imports
+4. Zig 0.16.0 random API: `std.c.arc4random_buf`, NOT `std.crypto.random` (removed)
+5. For test executables with C `main`: build a small Zig library and link it via `root_module.linkLibrary()`
+6. Replace C headers with inline `extern` declarations when removing header files
 
 ---
 
 ## Build System Strategy
 
 As each module is converted, update `build.zig`:
-- Remove the C source file from the `sources` list
-- Add the corresponding `.zig` file
-- Keep `link_libc = true` for system API access during transition
-- Once all C is gone, `link_libc` can be removed if no C stdlib is needed
+1. Create `expat/lib/lib.zig` as the Zig entry point (or update it if it already exists)
+2. Import the new `.zig` module in `lib.zig` with `comptime { _ = &module; }`
+3. Set `root_source_file = b.path("expat/lib/lib.zig")` on the library module
+4. Remove the C source file from `addCSourceFiles()`
+5. Keep `link_libc = true` for system API access during transition
+6. For test executables that compile C sources directly, build a small Zig library and link it via `root_module.linkLibrary()`
+7. Replace C header includes with inline `extern` declarations in the C source
+8. Once all C is gone, `link_libc` can be removed if no C stdlib is needed
 
 ---
 

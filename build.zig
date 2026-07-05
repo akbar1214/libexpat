@@ -41,34 +41,6 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("expat/AUTHORS"), .prefix, "AUTHORS").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("expat/Changes"), .prefix, "changelog").step);
 
-    const has_getrandom: bool = switch (target.result.os.tag) {
-        .linux => if (target.result.isMuslLibC())
-            true
-        else if (target.result.isGnuLibC())
-            target.result.os.version_range.linux.glibc.order(.{ .major = 2, .minor = 25, .patch = 0 }) != .lt
-        else
-            unreachable,
-        .freebsd => target.result.os.isAtLeast(.freebsd, .{ .major = 12, .minor = 0, .patch = 0 }) orelse false,
-        .netbsd => target.result.os.isAtLeast(.netbsd, .{ .major = 10, .minor = 0, .patch = 0 }) orelse false,
-        else => false,
-    };
-
-    const has_arc4random_buf: bool = switch (target.result.os.tag) {
-        .dragonfly, .netbsd, .freebsd, .openbsd, .macos, .ios, .tvos, .watchos, .visionos => true,
-        else => false,
-    };
-
-    const has_getentropy: bool = switch (target.result.os.tag) {
-        .dragonfly, .netbsd, .freebsd, .openbsd, .macos, .ios, .tvos, .watchos, .visionos => true,
-        .linux => if (target.result.isGnuLibC())
-            target.result.os.version_range.linux.glibc.order(.{ .major = 2, .minor = 17, .patch = 0 }) != .lt
-        else
-            false,
-        else => false,
-    };
-
-    const xml_dev_urandom = target.result.os.tag != .windows;
-
     const config_header = b.addConfigHeader(.{
         .style = .{ .cmake = b.path("expat/expat_config.h.cmake") },
         .include_path = "expat_config.h",
@@ -78,24 +50,12 @@ pub fn build(b: *std.Build) void {
             .big => 4321,
         }),
         .HAVE_ARC4RANDOM = null,
-        .HAVE_ARC4RANDOM_BUF = switch (target.result.os.tag) {
-            .dragonfly,
-            .netbsd,
-            .freebsd,
-            .openbsd,
-            .macos,
-            .ios,
-            .tvos,
-            .watchos,
-            .visionos,
-            => true,
-            else => false,
-        },
+        .HAVE_ARC4RANDOM_BUF = null,
         .HAVE_DLFCN_H = target.result.os.tag != .windows,
         .HAVE_FCNTL_H = true,
         .HAVE_GETPAGESIZE = target.result.os.tag.isBSD(),
-        .HAVE_GETRANDOM = has_getrandom,
-        .HAVE_GETENTROPY = has_getentropy,
+        .HAVE_GETRANDOM = null,
+        .HAVE_GETENTROPY = null,
         .HAVE_INTTYPES_H = true,
         .HAVE_LIBBSD = null,
         .HAVE_MEMORY_H = true,
@@ -104,7 +64,7 @@ pub fn build(b: *std.Build) void {
         .HAVE_STDLIB_H = true,
         .HAVE_STRINGS_H = true,
         .HAVE_STRING_H = true,
-        .HAVE_SYSCALL_GETRANDOM = has_getrandom,
+        .HAVE_SYSCALL_GETRANDOM = null,
         .HAVE_SYS_STAT_H = true,
         .HAVE_SYS_TYPES_H = true,
         .HAVE_UNISTD_H = true,
@@ -117,7 +77,7 @@ pub fn build(b: *std.Build) void {
         .WORDS_BIGENDIAN = target.result.cpu.arch.endian() == .big,
         .XML_ATTR_INFO = attr_info,
         .XML_CONTEXT_BYTES = context_bytes,
-        .XML_DEV_URANDOM = target.result.os.tag != .windows,
+        .XML_DEV_URANDOM = null,
         .XML_DTD = dtd,
         .XML_GE = ge,
         .XML_NS = ns,
@@ -133,6 +93,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .strip = strip,
             .pic = pic,
+            .root_source_file = b.path("expat/lib/lib.zig"),
         }),
     });
     b.installArtifact(expat);
@@ -153,20 +114,7 @@ pub fn build(b: *std.Build) void {
             &.{ "-std=c99", "-fno-sanitize=undefined" },
     });
 
-    var random_srcs: std.ArrayList([]const u8) = .empty;
-    if (has_getentropy) random_srcs.append(b.allocator, "lib/random_getentropy.c") catch @panic("OOM");
-    if (has_getrandom) random_srcs.append(b.allocator, "lib/random_getrandom.c") catch @panic("OOM");
-    if (has_arc4random_buf) random_srcs.append(b.allocator, "lib/random_arc4random_buf.c") catch @panic("OOM");
-    if (xml_dev_urandom) random_srcs.append(b.allocator, "lib/random_dev_urandom.c") catch @panic("OOM");
-    if (target.result.os.tag == .windows) random_srcs.append(b.allocator, "lib/random_rand_s.c") catch @panic("OOM");
-    expat.root_module.addCSourceFiles(.{
-        .files = random_srcs.items,
-        .root = b.path("expat"),
-        .flags = if (need_short_char_arg)
-            &.{ "-std=c99", "-fno-sanitize=undefined", "-fshort-wchar" }
-        else
-            &.{ "-std=c99", "-fno-sanitize=undefined" },
-    });
+    // All random sources are now handled by expat/lib/random.zig (imported via lib.zig)
 
     const xmlwf = b.addExecutable(.{
         .name = "xmlwf",
@@ -259,15 +207,23 @@ pub fn build(b: *std.Build) void {
         if (large_size) test_exe.root_module.addCMacro("XML_LARGE_SIZE", "1");
         if (min_size) test_exe.root_module.addCMacro("XML_MIN_SIZE", "1");
         test_exe.root_module.addCSourceFiles(.{
+            .flags = if (need_short_char_arg) &.{ "-std=c99", "-fshort-wchar" } else &.{"-std=c99"},
+            .root = b.path("expat"),
             .files = sources,
-            .root = b.path("expat"),
-            .flags = if (need_short_char_arg) &.{ "-std=c99", "-fshort-wchar" } else &.{"-std=c99"},
         });
-        test_exe.root_module.addCSourceFiles(.{
-            .files = random_srcs.items,
-            .root = b.path("expat"),
-            .flags = if (need_short_char_arg) &.{ "-std=c99", "-fshort-wchar" } else &.{"-std=c99"},
+        // Link the Zig library that provides writeRandomBytes (and future Zig replacements).
+        // The test exe can't use root_source_file pointing to Zig because it gets main() from C.
+        const expat_random = b.addLibrary(.{
+            .linkage = .static,
+            .name = "expat_random",
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .root_source_file = b.path("expat/lib/lib.zig"),
+            }),
         });
+        test_exe.root_module.linkLibrary(expat_random);
 
         if (char_type == .ushort) {
             @panic("The testsuite can not be built with option -Dchar-type=ushort. Please pass -Dchar-type=(char|wchar_t)");

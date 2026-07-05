@@ -54,12 +54,94 @@ zig build benchmark            # Run the benchmark (needs testdata/benchmark.xml
 - The benchmark step passes default arguments (`testdata/benchmark.xml 4096 100`). Override by running the built binary directly.
 - The xmlwf step only builds the tool (to `zig-out/bin/xmlwf`); it does not auto-run. Run it manually with a file argument.
 
+### Zig Source File Integration (C-to-Zig Migration)
+
+**How to add Zig source files to a library that also has C sources:**
+
+Zig 0.16.0 has **no** `addZigSourceFile()` or `addZigSourceFiles()` method. Zig discovers `.zig` files automatically through `@import` starting from `root_source_file`.
+
+1. Create a root Zig file (e.g., `expat/lib/lib.zig`) that `@import`s replacement modules
+2. Set `root_source_file = b.path("expat/lib/lib.zig")` in `createModule()`
+3. Remove the corresponding C file from `addCSourceFiles()`
+
+```zig
+// build.zig
+const expat = b.addLibrary(.{
+    .linkage = linkage,
+    .name = "expat",
+    .root_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .root_source_file = b.path("expat/lib/lib.zig"),  // Zig entry point
+    }),
+});
+```
+
+```zig
+// expat/lib/lib.zig — root file that imports replacements
+const random_arc4random_buf = @import("random_arc4random_buf.zig");
+comptime {
+    _ = &random_arc4random_buf;  // Force symbol emission
+}
+```
+
+**Critical rules for `export fn` to work across the C boundary:**
+
+- Use `pub export fn` (not just `export fn`) so the function is visible to `@import` from other Zig files
+- Use C-compatible types: `?*anyopaque` (not `[*]u8`) for `void*` parameters
+- Use `comptime { _ = &module; }` in the root file to force the compiler to emit the symbol (Zig uses lazy compilation — unreferenced imports are discarded)
+
+```zig
+// CORRECT — C-compatible types, pub visibility
+pub export fn writeRandomBytes_arc4random_buf(target: ?*anyopaque, count: usize) void {
+    std.c.arc4random_buf(@ptrCast(target), count);
+}
+```
+
+```zig
+// WRONG — [*]u8 doesn't match C's void*, no pub
+export fn writeRandomBytes_arc4random_buf(target: [*]u8, count: usize) void {
+    std.crypto.random.bytes(target[0..count]);  // Also: std.crypto.random doesn't exist in 0.16.0
+}
+```
+
+**Limitation: Executables with C `main` cannot use `root_source_file` pointing to Zig.**
+If the executable gets its `main()` from C sources (not from Zig), setting `root_source_file` to a `.zig` file causes a "no member named 'main'" error. For test executables that compile C sources directly, build a small Zig library and link it instead:
+
+```zig
+// For test exe that compiles C sources directly — can't use root_source_file pointing to Zig.
+// Instead, build a small Zig library and link it.
+const expat_random = b.addLibrary(.{
+    .linkage = .static,
+    .name = "expat_random",
+    .root_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .root_source_file = b.path("expat/lib/lib.zig"),
+    }),
+});
+test_exe.root_module.linkLibrary(expat_random);
+```
+
+**Zig 0.16.0 linking API:**
+- `linkLibrary()` on `Build.Step.Compile` was **removed** in Zig 0.16.0
+- Use `root_module.linkLibrary()` instead: `exe.root_module.linkLibrary(lib);`
+
+**Zig 0.16.0 random API:**
+- `std.crypto.random` does **not** exist in Zig 0.16.0 (was removed/changed)
+- Use `std.c.arc4random_buf()` for arc4random (available on macOS/BSD via libc)
+- Use `std.posix` for other platform-specific random sources
+
 ### Key Files
 
 - `build.zig` — Main Zig build script
 - `build.zig.zon` — Project manifest
 - `.mise.toml` — Zig version pin
 - `expat/lib/` — Core library sources
+- `expat/lib/lib.zig` — Zig root file for C-to-Zig migration (imports replacement modules)
+- `expat/lib/random_arc4random_buf.zig` — Zig replacement for C random source (Phase 1a)
 - `expat/xmlwf/` — XML well-formedness checker
 - `expat/tests/` — Test suite (C only, no C++ wrappers in 2.8.2)
 - `expat/examples/` — Example programs
